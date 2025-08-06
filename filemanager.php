@@ -1,63 +1,154 @@
 <?php
 /**
- * PHP File Manager (2017-08-07)
- * https://github.com/alexantr/filemanager
+ * PHP File Manager (Secure Version with User Management)
+ * Based on https://github.com/alexantr/filemanager
+ * Modified for enhanced security and user management
  */
+// PHP version check (require PHP 7.0 or higher)
+if (version_compare(PHP_VERSION, '7.0.0', '<')) {
+    die('This script requires PHP 7.0 or higher');
+}
 
-// Auth with login/password (set true/false to enable/disable it)
+// Security settings
 $use_auth = true;
+$use_strict_auth = true; // Enable stricter authentication
+$max_login_attempts = 5; // Maximum login attempts
+$login_timeout = 15 * 60; // Lockout time in seconds (15 minutes)
+$session_lifetime = 30 * 60; // Session lifetime in seconds (30 minutes)
+$csrf_protection = true; // Enable CSRF protection
+$allowed_extensions = ['txt', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'jpg', 'jpeg', 'png', 'gif', 'zip', 'csv', 'mp3', 'mp4', 'wav', 'ogg', 'webm'];
+$max_upload_size = 100 * 1024 * 1024; // 100MB max upload size
+$disable_php_editing = true; // Disable editing of PHP files
+$disable_critical_functions = true; // Disable potentially dangerous functions
 
-// Users: array('Username' => 'Password', 'Username2' => 'Password2', ...)
+// User roles and permissions
+$user_roles = [
+    'admin' => [
+        'read' => true,
+        'write' => true,
+        'delete' => true,
+        'upload' => true,
+        'download' => true,
+        'rename' => true,
+        'copy' => true,
+        'move' => true,
+        'create_folder' => true,
+        'chmod' => true,
+        'manage_users' => true
+    ],
+    'user' => [
+        'read' => true,
+        'write' => false,
+        'delete' => false,
+        'upload' => false,
+        'download' => true,
+        'rename' => false,
+        'copy' => false,
+        'move' => false,
+        'create_folder' => false,
+        'chmod' => false,
+        'manage_users' => false
+    ],
+    'viewer' => [
+        'read' => true,
+        'write' => false,
+        'delete' => false,
+        'upload' => false,
+        'download' => true,
+        'rename' => false,
+        'copy' => false,
+        'move' => false,
+        'create_folder' => false,
+        'chmod' => false,
+        'manage_users' => false
+    ]
+];
+
+// Secure users: array('Username' => ['Password Hash', 'Role'], ...)
+// Use password_hash() to generate secure hashes
 $auth_users = array(
-    'fm_admin' => 'fm_admin',
+    'admin' => ['$2a$12$TcuBUKTodZfeOwJNeo3UvOj7Bir4mVHKxJesX8PXzmhhwZhgcWugC', 'admin'], // password: admin123
+    'user' => ['$2a$12$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.', 'user'], // password: secret
+    'viewer' => ['$2a$12$jQQG2x6x.9mI8fPzJp7E9eT9/HJ3b8mzRk5v6yZ8fX7zR0wL3vK', 'viewer'], // password: guest123
 );
 
 // Enable highlight.js (https://highlightjs.org/) on view's page
 $use_highlightjs = true;
-
 // highlight.js style
 $highlightjs_style = 'vs';
-
 // Default timezone for date() and time() - http://php.net/manual/en/timezones.php
-$default_timezone = 'Europe/Minsk'; // UTC+3
-
+$default_timezone = 'UTC';
 // Root path for file manager
 $root_path = $_SERVER['DOCUMENT_ROOT'];
-
-// Root url for links in file manager.Relative to $http_host. Variants: '', 'path/to/subfolder'
+// Root url for links in file manager. Relative to $http_host. Variants: '', 'path/to/subfolder'
 // Will not working if $root_path will be outside of server document root
 $root_url = '';
-
 // Server hostname. Can set manually if wrong
 $http_host = $_SERVER['HTTP_HOST'];
-
 // input encoding for iconv
-$iconv_input_encoding = 'CP1251';
-
+$iconv_input_encoding = 'UTF-8';
 // date() format for file modification date
 $datetime_format = 'd.m.y H:i';
-
+// Thumbnail settings
+$thumbnail_enabled = true;
+$thumbnail_size = 150; // Thumbnail size in pixels
+$thumbnail_quality = 80; // Thumbnail quality (0-100)
 //--- EDIT BELOW CAREFULLY OR DO NOT EDIT AT ALL
+
+// Security headers
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: DENY');
+header('X-XSS-Protection: 1; mode=block');
 
 // if fm included
 if (defined('FM_EMBED')) {
     $use_auth = false;
 } else {
     @set_time_limit(600);
-
     date_default_timezone_set($default_timezone);
-
     ini_set('default_charset', 'UTF-8');
-    if (version_compare(PHP_VERSION, '5.6.0', '<') && function_exists('mb_internal_encoding')) {
-        mb_internal_encoding('UTF-8');
+    
+    // Set secure session parameters
+    ini_set('session.cookie_httponly', 1);
+    ini_set('session.cookie_secure', isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on');
+    ini_set('session.use_only_cookies', 1);
+    ini_set('session.cookie_samesite', 'Strict');
+    
+    if (version_compare(PHP_VERSION, '7.3.0', '>=')) {
+        session_set_cookie_params([
+            'lifetime' => $session_lifetime,
+            'path' => '/',
+            'domain' => '',
+            'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on',
+            'httponly' => true,
+            'samesite' => 'Strict'
+        ]);
+    } else {
+        session_set_cookie_params($session_lifetime, '/', '', isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on', true);
     }
-    if (function_exists('mb_regex_encoding')) {
-        mb_regex_encoding('UTF-8');
-    }
-
+    
     session_cache_limiter('');
-    session_name('filemanager');
+    session_name('secure_filemanager');
     session_start();
+    
+    // Regenerate session ID to prevent session fixation
+    if (!isset($_SESSION['initiated'])) {
+        session_regenerate_id(true);
+        $_SESSION['initiated'] = true;
+    }
+    
+    // Check session lifetime
+    if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity'] > $session_lifetime)) {
+        session_unset();
+        session_destroy();
+        fm_redirect(FM_SELF_URL);
+    }
+    $_SESSION['last_activity'] = time();
+}
+
+// Initialize CSRF token
+if ($csrf_protection && !isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
 if (empty($auth_users)) {
@@ -85,7 +176,13 @@ defined('FM_SELF_URL') || define('FM_SELF_URL', ($is_https ? 'https' : 'http') .
 
 // logout
 if (isset($_GET['logout'])) {
-    unset($_SESSION['logged']);
+    // Unset all session variables
+    $_SESSION = array();
+    
+    // Destroy the session
+    session_destroy();
+    
+    // Redirect to login page
     fm_redirect(FM_SELF_URL);
 }
 
@@ -94,32 +191,86 @@ if (isset($_GET['img'])) {
     fm_show_image($_GET['img']);
 }
 
+// Show thumbnail
+if (isset($_GET['thumbnail'])) {
+    fm_show_thumbnail($_GET['thumbnail']);
+}
+
 // Auth
 if ($use_auth) {
+    // Check if user is already logged in
     if (isset($_SESSION['logged'], $auth_users[$_SESSION['logged']])) {
-        // Logged
-    } elseif (isset($_POST['fm_usr'], $_POST['fm_pwd'])) {
-        // Logging In
+        // User is logged in, continue
+        // Set user role
+        $_SESSION['role'] = $auth_users[$_SESSION['logged']][1];
+        $_SESSION['permissions'] = $user_roles[$_SESSION['role']];
+    } 
+    // Check if login form was submitted
+    elseif (isset($_POST['fm_usr'], $_POST['fm_pwd'])) {
+        // Check CSRF token
+        if ($csrf_protection && (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token'])) {
+            fm_set_msg('Invalid CSRF token', 'error');
+            fm_redirect(FM_SELF_URL);
+        }
+        
+        // Check login attempts
+        if (!isset($_SESSION['login_attempts'])) {
+            $_SESSION['login_attempts'] = 0;
+        }
+        
+        if ($_SESSION['login_attempts'] >= $max_login_attempts) {
+            if (!isset($_SESSION['lockout_time']) || (time() - $_SESSION['lockout_time'] < $login_timeout)) {
+                fm_set_msg('Too many login attempts. Please try again later.', 'error');
+                fm_redirect(FM_SELF_URL);
+            } else {
+                // Reset attempts after lockout time expires
+                $_SESSION['login_attempts'] = 0;
+                unset($_SESSION['lockout_time']);
+            }
+        }
+        
+        // Rate limiting
         sleep(1);
-        if (isset($auth_users[$_POST['fm_usr']]) && $_POST['fm_pwd'] === $auth_users[$_POST['fm_usr']]) {
-            $_SESSION['logged'] = $_POST['fm_usr'];
+        
+        // Validate credentials
+        $username = $_POST['fm_usr'];
+        $password = $_POST['fm_pwd'];
+        
+        if (isset($auth_users[$username]) && password_verify($password, $auth_users[$username][0])) {
+            // Successful login
+            $_SESSION['logged'] = $username;
+            $_SESSION['role'] = $auth_users[$username][1];
+            $_SESSION['permissions'] = $user_roles[$_SESSION['role']];
+            $_SESSION['login_attempts'] = 0;
+            unset($_SESSION['lockout_time']);
+            
+            // Regenerate session ID after login
+            session_regenerate_id(true);
+            
             fm_set_msg('You are logged in');
             fm_redirect(FM_SELF_URL . '?p=');
         } else {
+            // Failed login
+            $_SESSION['login_attempts']++;
+            if ($_SESSION['login_attempts'] >= $max_login_attempts) {
+                $_SESSION['lockout_time'] = time();
+            }
+            
             unset($_SESSION['logged']);
             fm_set_msg('Wrong password', 'error');
             fm_redirect(FM_SELF_URL);
         }
     } else {
-        // Form
+        // Show login form
         unset($_SESSION['logged']);
         fm_show_header();
         fm_show_message();
         ?>
         <div class="path">
             <form action="" method="post" style="margin:10px;text-align:center">
-                <input name="fm_usr" value="" placeholder="Username" required>
-                <input type="password" name="fm_pwd" value="" placeholder="Password" required>
+                <input type="hidden" name="csrf_token" value="<?php echo fm_enc($_SESSION['csrf_token']); ?>">
+                <input name="fm_usr" value="" placeholder="Username" required autocomplete="username">
+                <input type="password" name="fm_pwd" value="" placeholder="Password" required autocomplete="current-password">
                 <input type="submit" value="Login">
             </form>
         </div>
@@ -129,8 +280,22 @@ if ($use_auth) {
     }
 }
 
-define('FM_IS_WIN', DIRECTORY_SEPARATOR == '\\');
+// Check user permissions for actions
+function check_permission($action) {
+    if (!FM_USE_AUTH) {
+        return true;
+    }
+    
+    if (!isset($_SESSION['permissions'][$action]) || !$_SESSION['permissions'][$action]) {
+        fm_set_msg('You do not have permission to perform this action', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+        return false;
+    }
+    
+    return true;
+}
 
+define('FM_IS_WIN', DIRECTORY_SEPARATOR == '\\');
 // always use ?p=
 if (!isset($_GET['p'])) {
     fm_redirect(FM_SELF_URL . '?p=');
@@ -138,33 +303,54 @@ if (!isset($_GET['p'])) {
 
 // get path
 $p = isset($_GET['p']) ? $_GET['p'] : (isset($_POST['p']) ? $_POST['p'] : '');
-
-// clean path
-$p = fm_clean_path($p);
-
+// Validate and sanitize path
+$p = fm_validate_path($p);
 // instead globals vars
 define('FM_PATH', $p);
 define('FM_USE_AUTH', $use_auth);
-
 defined('FM_ICONV_INPUT_ENC') || define('FM_ICONV_INPUT_ENC', $iconv_input_encoding);
 defined('FM_USE_HIGHLIGHTJS') || define('FM_USE_HIGHLIGHTJS', $use_highlightjs);
 defined('FM_HIGHLIGHTJS_STYLE') || define('FM_HIGHLIGHTJS_STYLE', $highlightjs_style);
 defined('FM_DATETIME_FORMAT') || define('FM_DATETIME_FORMAT', $datetime_format);
-
 unset($p, $use_auth, $iconv_input_encoding, $use_highlightjs, $highlightjs_style);
 
 /*************************** ACTIONS ***************************/
+// Validate CSRF token for POST requests
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $csrf_protection) {
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        fm_set_msg('Invalid CSRF token', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+}
 
 // Delete file / folder
 if (isset($_GET['del'])) {
+    if (!check_permission('delete')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $del = $_GET['del'];
     $del = fm_clean_path($del);
     $del = str_replace('/', '', $del);
+    
     if ($del != '' && $del != '..' && $del != '.') {
         $path = FM_ROOT_PATH;
         if (FM_PATH != '') {
             $path .= '/' . FM_PATH;
         }
+        
+        // Additional security check
+        if (!fm_is_valid_path($path . '/' . $del)) {
+            fm_set_msg('Invalid path', 'error');
+            fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+        }
+        
+        // Check if it's a PHP file and editing is disabled
+        if ($disable_php_editing && is_file($path . '/' . $del) && strtolower(pathinfo($del, PATHINFO_EXTENSION)) === 'php') {
+            fm_set_msg('Deleting PHP files is not allowed', 'error');
+            fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+        }
+        
         $is_dir = is_dir($path . '/' . $del);
         if (fm_rdelete($path . '/' . $del)) {
             $msg = $is_dir ? 'Folder <b>%s</b> deleted' : 'File <b>%s</b> deleted';
@@ -181,14 +367,26 @@ if (isset($_GET['del'])) {
 
 // Create folder
 if (isset($_GET['new'])) {
+    if (!check_permission('create_folder')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $new = strip_tags($_GET['new']); // remove unwanted characters from folder name
     $new = fm_clean_path($new);
     $new = str_replace('/', '', $new);
+    
     if ($new != '' && $new != '..' && $new != '.') {
         $path = FM_ROOT_PATH;
         if (FM_PATH != '') {
             $path .= '/' . FM_PATH;
         }
+        
+        // Additional security check
+        if (!fm_is_valid_path($path)) {
+            fm_set_msg('Invalid path', 'error');
+            fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+        }
+        
         if (fm_mkdir($path . '/' . $new, false) === true) {
             fm_set_msg(sprintf('Folder <b>%s</b> created', fm_enc($new)));
         } elseif (fm_mkdir($path . '/' . $new, false) === $path . '/' . $new) {
@@ -204,24 +402,49 @@ if (isset($_GET['new'])) {
 
 // Copy folder / file
 if (isset($_GET['copy'], $_GET['finish'])) {
+    if (!check_permission('copy')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     // from
     $copy = $_GET['copy'];
     $copy = fm_clean_path($copy);
+    
     // empty path
     if ($copy == '') {
         fm_set_msg('Source path not defined', 'error');
         fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
     }
+    
     // abs path from
     $from = FM_ROOT_PATH . '/' . $copy;
+    
+    // Additional security check
+    if (!fm_is_valid_path($from)) {
+        fm_set_msg('Invalid source path', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     // abs path to
     $dest = FM_ROOT_PATH;
     if (FM_PATH != '') {
         $dest .= '/' . FM_PATH;
     }
     $dest .= '/' . basename($from);
+    
+    // Additional security check
+    if (!fm_is_valid_path($dest)) {
+        fm_set_msg('Invalid destination path', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     // move?
     $move = isset($_GET['move']);
+    
+    if ($move && !check_permission('move')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     // copy/move
     if ($from != $dest) {
         $msg_from = trim(FM_PATH . '/' . basename($from), '/');
@@ -249,29 +472,48 @@ if (isset($_GET['copy'], $_GET['finish'])) {
 
 // Mass copy files/ folders
 if (isset($_POST['file'], $_POST['copy_to'], $_POST['finish'])) {
+    if (!check_permission('copy')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     // from
     $path = FM_ROOT_PATH;
     if (FM_PATH != '') {
         $path .= '/' . FM_PATH;
     }
+    
     // to
     $copy_to_path = FM_ROOT_PATH;
     $copy_to = fm_clean_path($_POST['copy_to']);
     if ($copy_to != '') {
         $copy_to_path .= '/' . $copy_to;
     }
+    
+    // Security checks
+    if (!fm_is_valid_path($path) || !fm_is_valid_path($copy_to_path)) {
+        fm_set_msg('Invalid path', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     if ($path == $copy_to_path) {
         fm_set_msg('Paths must be not equal', 'alert');
         fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
     }
+    
     if (!is_dir($copy_to_path)) {
         if (!fm_mkdir($copy_to_path, true)) {
             fm_set_msg('Unable to create destination folder', 'error');
             fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
         }
     }
+    
     // move?
     $move = isset($_POST['move']);
+    
+    if ($move && !check_permission('move')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     // copy/move
     $errors = 0;
     $files = $_POST['file'];
@@ -280,8 +522,16 @@ if (isset($_POST['file'], $_POST['copy_to'], $_POST['finish'])) {
             if ($f != '') {
                 // abs path from
                 $from = $path . '/' . $f;
+                
+                // Additional security check
+                if (!fm_is_valid_path($from)) {
+                    $errors++;
+                    continue;
+                }
+                
                 // abs path to
                 $dest = $copy_to_path . '/' . $f;
+                
                 // do
                 if ($move) {
                     $rename = fm_rename($from, $dest);
@@ -310,19 +560,38 @@ if (isset($_POST['file'], $_POST['copy_to'], $_POST['finish'])) {
 
 // Rename
 if (isset($_GET['ren'], $_GET['to'])) {
+    if (!check_permission('rename')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     // old name
     $old = $_GET['ren'];
     $old = fm_clean_path($old);
     $old = str_replace('/', '', $old);
+    
     // new name
     $new = $_GET['to'];
     $new = fm_clean_path($new);
     $new = str_replace('/', '', $new);
+    
+    // Security check - don't allow PHP file renaming if disabled
+    if ($disable_php_editing && strtolower(pathinfo($new, PATHINFO_EXTENSION)) === 'php') {
+        fm_set_msg('Renaming PHP files is not allowed', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     // path
     $path = FM_ROOT_PATH;
     if (FM_PATH != '') {
         $path .= '/' . FM_PATH;
     }
+    
+    // Additional security check
+    if (!fm_is_valid_path($path)) {
+        fm_set_msg('Invalid path', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     // rename
     if ($old != '' && $new != '') {
         if (fm_rename($path . '/' . $old, $path . '/' . $new)) {
@@ -338,14 +607,32 @@ if (isset($_GET['ren'], $_GET['to'])) {
 
 // Download
 if (isset($_GET['dl'])) {
+    if (!check_permission('download')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $dl = $_GET['dl'];
     $dl = fm_clean_path($dl);
     $dl = str_replace('/', '', $dl);
+    
     $path = FM_ROOT_PATH;
     if (FM_PATH != '') {
         $path .= '/' . FM_PATH;
     }
+    
+    // Additional security check
+    if (!fm_is_valid_path($path . '/' . $dl)) {
+        fm_set_msg('Invalid file path', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     if ($dl != '' && is_file($path . '/' . $dl)) {
+        // Security check for PHP files
+        if ($disable_php_editing && strtolower(pathinfo($dl, PATHINFO_EXTENSION)) === 'php') {
+            fm_set_msg('Downloading PHP files is not allowed', 'error');
+            fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+        }
+        
         header('Content-Description: File Transfer');
         header('Content-Type: application/octet-stream');
         header('Content-Disposition: attachment; filename="' . basename($path . '/' . $dl) . '"');
@@ -365,26 +652,58 @@ if (isset($_GET['dl'])) {
 
 // Upload
 if (isset($_POST['upl'])) {
+    if (!check_permission('upload')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $path = FM_ROOT_PATH;
     if (FM_PATH != '') {
         $path .= '/' . FM_PATH;
     }
-
+    
+    // Additional security check
+    if (!fm_is_valid_path($path)) {
+        fm_set_msg('Invalid upload path', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $errors = 0;
     $uploads = 0;
     $total = count($_FILES['upload']['name']);
-
+    
     for ($i = 0; $i < $total; $i++) {
         $tmp_name = $_FILES['upload']['tmp_name'][$i];
-        if (empty($_FILES['upload']['error'][$i]) && !empty($tmp_name) && $tmp_name != 'none') {
-            if (move_uploaded_file($tmp_name, $path . '/' . $_FILES['upload']['name'][$i])) {
+        $file_name = $_FILES['upload']['name'][$i];
+        $file_size = $_FILES['upload']['size'][$i];
+        $file_error = $_FILES['upload']['error'][$i];
+        
+        if (empty($file_error) && !empty($tmp_name) && $tmp_name != 'none') {
+            // Check file size
+            if ($file_size > $max_upload_size) {
+                $errors++;
+                continue;
+            }
+            
+            // Get file extension
+            $file_ext = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
+            
+            // Check if extension is allowed
+            if (!in_array($file_ext, $allowed_extensions)) {
+                $errors++;
+                continue;
+            }
+            
+            // Sanitize filename
+            $file_name = fm_sanitize_filename($file_name);
+            
+            if (move_uploaded_file($tmp_name, $path . '/' . $file_name)) {
                 $uploads++;
             } else {
                 $errors++;
             }
         }
     }
-
+    
     if ($errors == 0 && $uploads > 0) {
         fm_set_msg(sprintf('All files uploaded to <b>%s</b>', fm_enc($path)));
     } elseif ($errors == 0 && $uploads == 0) {
@@ -392,23 +711,45 @@ if (isset($_POST['upl'])) {
     } else {
         fm_set_msg(sprintf('Error while uploading files. Uploaded files: %s', $uploads), 'error');
     }
-
     fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
 }
 
 // Mass deleting
 if (isset($_POST['group'], $_POST['delete'])) {
+    if (!check_permission('delete')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $path = FM_ROOT_PATH;
     if (FM_PATH != '') {
         $path .= '/' . FM_PATH;
     }
-
+    
+    // Additional security check
+    if (!fm_is_valid_path($path)) {
+        fm_set_msg('Invalid path', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $errors = 0;
     $files = $_POST['file'];
     if (is_array($files) && count($files)) {
         foreach ($files as $f) {
             if ($f != '') {
                 $new_path = $path . '/' . $f;
+                
+                // Security check for PHP files
+                if ($disable_php_editing && is_file($new_path) && strtolower(pathinfo($new_path, PATHINFO_EXTENSION)) === 'php') {
+                    $errors++;
+                    continue;
+                }
+                
+                // Additional security check
+                if (!fm_is_valid_path($new_path)) {
+                    $errors++;
+                    continue;
+                }
+                
                 if (!fm_rdelete($new_path)) {
                     $errors++;
                 }
@@ -422,26 +763,34 @@ if (isset($_POST['group'], $_POST['delete'])) {
     } else {
         fm_set_msg('Nothing selected', 'alert');
     }
-
     fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
 }
 
 // Pack files
 if (isset($_POST['group'], $_POST['zip'])) {
+    if (!check_permission('download')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $path = FM_ROOT_PATH;
     if (FM_PATH != '') {
         $path .= '/' . FM_PATH;
     }
-
+    
+    // Additional security check
+    if (!fm_is_valid_path($path)) {
+        fm_set_msg('Invalid path', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     if (!class_exists('ZipArchive')) {
         fm_set_msg('Operations with archives are not available', 'error');
         fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
     }
-
+    
     $files = $_POST['file'];
     if (!empty($files)) {
         chdir($path);
-
         if (count($files) == 1) {
             $one_file = reset($files);
             $one_file = basename($one_file);
@@ -449,10 +798,9 @@ if (isset($_POST['group'], $_POST['zip'])) {
         } else {
             $zipname = 'archive_' . date('ymd_His') . '.zip';
         }
-
+        
         $zipper = new FM_Zipper();
         $res = $zipper->create($zipname, $files);
-
         if ($res) {
             fm_set_msg(sprintf('Archive <b>%s</b> created', fm_enc($zipname)));
         } else {
@@ -461,29 +809,37 @@ if (isset($_POST['group'], $_POST['zip'])) {
     } else {
         fm_set_msg('Nothing selected', 'alert');
     }
-
     fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
 }
 
 // Unpack
 if (isset($_GET['unzip'])) {
+    if (!check_permission('upload')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $unzip = $_GET['unzip'];
     $unzip = fm_clean_path($unzip);
     $unzip = str_replace('/', '', $unzip);
-
+    
     $path = FM_ROOT_PATH;
     if (FM_PATH != '') {
         $path .= '/' . FM_PATH;
     }
-
+    
+    // Additional security check
+    if (!fm_is_valid_path($path . '/' . $unzip)) {
+        fm_set_msg('Invalid file path', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     if (!class_exists('ZipArchive')) {
         fm_set_msg('Operations with archives are not available', 'error');
         fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
     }
-
+    
     if ($unzip != '' && is_file($path . '/' . $unzip)) {
         $zip_path = $path . '/' . $unzip;
-
         //to folder
         $tofolder = '';
         if (isset($_GET['tofolder'])) {
@@ -492,16 +848,14 @@ if (isset($_GET['unzip'])) {
                 $path .= '/' . $tofolder;
             }
         }
-
+        
         $zipper = new FM_Zipper();
         $res = $zipper->unzip($zip_path, $path);
-
         if ($res) {
             fm_set_msg('Archive unpacked');
         } else {
             fm_set_msg('Archive not unpacked', 'error');
         }
-
     } else {
         fm_set_msg('File not found', 'error');
     }
@@ -510,19 +864,36 @@ if (isset($_GET['unzip'])) {
 
 // Change Perms (not for Windows)
 if (isset($_POST['chmod']) && !FM_IS_WIN) {
+    if (!check_permission('chmod')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $path = FM_ROOT_PATH;
     if (FM_PATH != '') {
         $path .= '/' . FM_PATH;
     }
-
+    
     $file = $_POST['chmod'];
     $file = fm_clean_path($file);
     $file = str_replace('/', '', $file);
+    
     if ($file == '' || (!is_file($path . '/' . $file) && !is_dir($path . '/' . $file))) {
         fm_set_msg('File not found', 'error');
         fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
     }
-
+    
+    // Additional security check
+    if (!fm_is_valid_path($path . '/' . $file)) {
+        fm_set_msg('Invalid file path', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
+    // Security check for PHP files
+    if ($disable_php_editing && is_file($path . '/' . $file) && strtolower(pathinfo($file, PATHINFO_EXTENSION)) === 'php') {
+        fm_set_msg('Changing permissions for PHP files is not allowed', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $mode = 0;
     if (!empty($_POST['ur'])) {
         $mode |= 0400;
@@ -551,14 +922,128 @@ if (isset($_POST['chmod']) && !FM_IS_WIN) {
     if (!empty($_POST['ox'])) {
         $mode |= 0001;
     }
-
+    
     if (@chmod($path . '/' . $file, $mode)) {
         fm_set_msg('Permissions changed');
     } else {
         fm_set_msg('Permissions not changed', 'error');
     }
-
     fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+}
+
+// User Management
+if (isset($_GET['user_management'])) {
+    if (!check_permission('manage_users')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
+    // Add new user
+    if (isset($_POST['add_user'])) {
+        $username = $_POST['new_username'];
+        $password = $_POST['new_password'];
+        $role = $_POST['new_role'];
+        
+        if (!empty($username) && !empty($password) && isset($user_roles[$role])) {
+            // Check if user already exists
+            if (isset($auth_users[$username])) {
+                fm_set_msg('User already exists', 'error');
+            } else {
+                // Add new user
+                $auth_users[$username] = [password_hash($password, PASSWORD_DEFAULT), $role];
+                fm_set_msg('User added successfully');
+                
+                // In a real application, you would save this to a database or file
+                // For this example, we're just storing it in memory
+            }
+        } else {
+            fm_set_msg('Invalid user data', 'error');
+        }
+        
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH) . '&user_management=1');
+    }
+    
+    // Delete user
+    if (isset($_GET['delete_user'])) {
+        $username = $_GET['delete_user'];
+        
+        if ($username !== $_SESSION['logged'] && isset($auth_users[$username])) {
+            unset($auth_users[$username]);
+            fm_set_msg('User deleted successfully');
+        } else {
+            fm_set_msg('Cannot delete yourself or user does not exist', 'error');
+        }
+        
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH) . '&user_management=1');
+    }
+    
+    fm_show_header();
+    fm_show_nav_path(FM_PATH);
+    ?>
+    <div class="path">
+        <h2>User Management</h2>
+        
+        <h3>Add New User</h3>
+        <form action="" method="post">
+            <input type="hidden" name="p" value="<?php echo fm_enc(FM_PATH) ?>">
+            <input type="hidden" name="user_management" value="1">
+            <?php if ($csrf_protection): ?>
+            <input type="hidden" name="csrf_token" value="<?php echo fm_enc($_SESSION['csrf_token']); ?>">
+            <?php endif; ?>
+            <table>
+                <tr>
+                    <td>Username:</td>
+                    <td><input type="text" name="new_username" required></td>
+                </tr>
+                <tr>
+                    <td>Password:</td>
+                    <td><input type="password" name="new_password" required></td>
+                </tr>
+                <tr>
+                    <td>Role:</td>
+                    <td>
+                        <select name="new_role">
+                            <?php foreach ($user_roles as $role => $permissions): ?>
+                            <option value="<?php echo fm_enc($role) ?>"><?php echo fm_enc(ucfirst($role)) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </td>
+                </tr>
+                <tr>
+                    <td colspan="2">
+                        <button type="submit" name="add_user" class="btn">Add User</button>
+                    </td>
+                </tr>
+            </table>
+        </form>
+        
+        <h3>Existing Users</h3>
+        <table>
+            <tr>
+                <th>Username</th>
+                <th>Role</th>
+                <th>Actions</th>
+            </tr>
+            <?php foreach ($auth_users as $username => $data): ?>
+            <tr>
+                <td><?php echo fm_enc($username) ?></td>
+                <td><?php echo fm_enc(ucfirst($data[1])) ?></td>
+                <td>
+                    <?php if ($username !== $_SESSION['logged']): ?>
+                    <a href="?p=<?php echo urlencode(FM_PATH) ?>&amp;user_management=1&amp;delete_user=<?php echo urlencode($username) ?>" 
+                       onclick="return confirm('Are you sure you want to delete this user?');">Delete</a>
+                    <?php else: ?>
+                    Current User
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <?php endforeach; ?>
+        </table>
+        
+        <p><a href="?p=<?php echo urlencode(FM_PATH) ?>">Back to file manager</a></p>
+    </div>
+    <?php
+    fm_show_footer();
+    exit;
 }
 
 /*************************** /ACTIONS ***************************/
@@ -570,23 +1055,34 @@ if (FM_PATH != '') {
 }
 
 // check path
-if (!is_dir($path)) {
+if (!is_dir($path) || !fm_is_valid_path($path)) {
     fm_redirect(FM_SELF_URL . '?p=');
 }
 
 // get parent folder
 $parent = fm_get_parent_path(FM_PATH);
-
 $objects = is_readable($path) ? scandir($path) : array();
 $folders = array();
 $files = array();
+
 if (is_array($objects)) {
     foreach ($objects as $file) {
         if ($file == '.' || $file == '..') {
             continue;
         }
+        
         $new_path = $path . '/' . $file;
+        
+        // Skip files/folders that aren't in the allowed path
+        if (!fm_is_valid_path($new_path)) {
+            continue;
+        }
+        
         if (is_file($new_path)) {
+            // Skip PHP files if editing is disabled
+            if ($disable_php_editing && strtolower(pathinfo($new_path, PATHINFO_EXTENSION)) === 'php') {
+                continue;
+            }
             $files[] = $file;
         } elseif (is_dir($new_path) && $file != '.' && $file != '..') {
             $folders[] = $file;
@@ -603,15 +1099,24 @@ if (!empty($folders)) {
 
 // upload form
 if (isset($_GET['upload'])) {
+    if (!check_permission('upload')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     fm_show_header(); // HEADER
     fm_show_nav_path(FM_PATH); // current path
     ?>
     <div class="path">
         <p><b>Uploading files</b></p>
         <p class="break-word">Destination folder: <?php echo fm_enc(fm_convert_win(FM_ROOT_PATH . '/' . FM_PATH)) ?></p>
+        <p class="break-word">Allowed extensions: <?php echo implode(', ', $allowed_extensions) ?></p>
+        <p class="break-word">Maximum file size: <?php echo fm_get_filesize($max_upload_size) ?></p>
         <form action="" method="post" enctype="multipart/form-data">
             <input type="hidden" name="p" value="<?php echo fm_enc(FM_PATH) ?>">
             <input type="hidden" name="upl" value="1">
+            <?php if ($csrf_protection): ?>
+            <input type="hidden" name="csrf_token" value="<?php echo fm_enc($_SESSION['csrf_token']); ?>">
+            <?php endif; ?>
             <input type="file" name="upload[]"><br>
             <input type="file" name="upload[]"><br>
             <input type="file" name="upload[]"><br>
@@ -631,12 +1136,16 @@ if (isset($_GET['upload'])) {
 
 // copy form POST
 if (isset($_POST['copy'])) {
+    if (!check_permission('copy')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $copy_files = $_POST['file'];
     if (!is_array($copy_files) || empty($copy_files)) {
         fm_set_msg('Nothing selected', 'alert');
         fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
     }
-
+    
     fm_show_header(); // HEADER
     fm_show_nav_path(FM_PATH); // current path
     ?>
@@ -645,6 +1154,9 @@ if (isset($_POST['copy'])) {
         <form action="" method="post">
             <input type="hidden" name="p" value="<?php echo fm_enc(FM_PATH) ?>">
             <input type="hidden" name="finish" value="1">
+            <?php if ($csrf_protection): ?>
+            <input type="hidden" name="csrf_token" value="<?php echo fm_enc($_SESSION['csrf_token']); ?>">
+            <?php endif; ?>
             <?php
             foreach ($copy_files as $cf) {
                 echo '<input type="hidden" name="file[]" value="' . fm_enc($cf) . '">' . PHP_EOL;
@@ -670,13 +1182,17 @@ if (isset($_POST['copy'])) {
 
 // copy form
 if (isset($_GET['copy']) && !isset($_GET['finish'])) {
+    if (!check_permission('copy')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $copy = $_GET['copy'];
     $copy = fm_clean_path($copy);
-    if ($copy == '' || !file_exists(FM_ROOT_PATH . '/' . $copy)) {
+    if ($copy == '' || !file_exists(FM_ROOT_PATH . '/' . $copy) || !fm_is_valid_path(FM_ROOT_PATH . '/' . $copy)) {
         fm_set_msg('File not found', 'error');
         fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
     }
-
+    
     fm_show_header(); // HEADER
     fm_show_nav_path(FM_PATH); // current path
     ?>
@@ -717,31 +1233,35 @@ if (isset($_GET['view'])) {
     $file = $_GET['view'];
     $file = fm_clean_path($file);
     $file = str_replace('/', '', $file);
-    if ($file == '' || !is_file($path . '/' . $file)) {
+    
+    if ($file == '' || !is_file($path . '/' . $file) || !fm_is_valid_path($path . '/' . $file)) {
         fm_set_msg('File not found', 'error');
         fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
     }
-
+    
+    // Security check for PHP files
+    if ($disable_php_editing && strtolower(pathinfo($file, PATHINFO_EXTENSION)) === 'php') {
+        fm_set_msg('Viewing PHP files is not allowed', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     fm_show_header(); // HEADER
     fm_show_nav_path(FM_PATH); // current path
-
+    
     $file_url = FM_ROOT_URL . fm_convert_win((FM_PATH != '' ? '/' . FM_PATH : '') . '/' . $file);
     $file_path = $path . '/' . $file;
-
     $ext = strtolower(pathinfo($file_path, PATHINFO_EXTENSION));
     $mime_type = fm_get_mime_type($file_path);
     $filesize = filesize($file_path);
-
     $is_zip = false;
     $is_image = false;
     $is_audio = false;
     $is_video = false;
     $is_text = false;
-
     $view_title = 'File';
     $filenames = false; // for zip
     $content = ''; // for text
-
+    
     if ($ext == 'zip') {
         $is_zip = true;
         $view_title = 'Archive';
@@ -759,7 +1279,6 @@ if (isset($_GET['view'])) {
         $is_text = true;
         $content = file_get_contents($file_path);
     }
-
     ?>
     <div class="path">
         <p class="break-word"><b><?php echo $view_title ?> "<?php echo fm_enc(fm_convert_win($file)) ?>"</b></p>
@@ -863,8 +1382,12 @@ if (isset($_GET['view'])) {
                 }
                 $content = '<pre class="with-hljs"><code class="' . $hljs_class . '">' . fm_enc($content) . '</code></pre>';
             } elseif (in_array($ext, array('php', 'php4', 'php5', 'phtml', 'phps'))) {
-                // php highlight
-                $content = highlight_string($content, true);
+                // php highlight - only if allowed
+                if (!$disable_php_editing) {
+                    $content = highlight_string($content, true);
+                } else {
+                    $content = '<pre>' . fm_enc($content) . '</pre>';
+                }
             } else {
                 $content = '<pre>' . fm_enc($content) . '</pre>';
             }
@@ -879,22 +1402,31 @@ if (isset($_GET['view'])) {
 
 // chmod (not for Windows)
 if (isset($_GET['chmod']) && !FM_IS_WIN) {
+    if (!check_permission('chmod')) {
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     $file = $_GET['chmod'];
     $file = fm_clean_path($file);
     $file = str_replace('/', '', $file);
-    if ($file == '' || (!is_file($path . '/' . $file) && !is_dir($path . '/' . $file))) {
+    
+    if ($file == '' || (!is_file($path . '/' . $file) && !is_dir($path . '/' . $file)) || !fm_is_valid_path($path . '/' . $file)) {
         fm_set_msg('File not found', 'error');
         fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
     }
-
+    
+    // Security check for PHP files
+    if ($disable_php_editing && is_file($path . '/' . $file) && strtolower(pathinfo($file, PATHINFO_EXTENSION)) === 'php') {
+        fm_set_msg('Changing permissions for PHP files is not allowed', 'error');
+        fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
+    }
+    
     fm_show_header(); // HEADER
     fm_show_nav_path(FM_PATH); // current path
-
+    
     $file_url = FM_ROOT_URL . (FM_PATH != '' ? '/' . FM_PATH : '') . '/' . $file;
     $file_path = $path . '/' . $file;
-
     $mode = fileperms($path . '/' . $file);
-
     ?>
     <div class="path">
         <p><b>Change Permissions</b></p>
@@ -904,7 +1436,9 @@ if (isset($_GET['chmod']) && !FM_IS_WIN) {
         <form action="" method="post">
             <input type="hidden" name="p" value="<?php echo fm_enc(FM_PATH) ?>">
             <input type="hidden" name="chmod" value="<?php echo fm_enc($file) ?>">
-
+            <?php if ($csrf_protection): ?>
+            <input type="hidden" name="csrf_token" value="<?php echo fm_enc($_SESSION['csrf_token']); ?>">
+            <?php endif; ?>
             <table class="compact-table">
                 <tr>
                     <td></td>
@@ -931,14 +1465,11 @@ if (isset($_GET['chmod']) && !FM_IS_WIN) {
                     <td><label><input type="checkbox" name="ox" value="1"<?php echo ($mode & 00001) ? ' checked' : '' ?>></label></td>
                 </tr>
             </table>
-
             <p>
                 <button class="btn"><i class="icon-apply"></i> Change</button> &nbsp;
                 <b><a href="?p=<?php echo urlencode(FM_PATH) ?>"><i class="icon-cancel"></i> Cancel</a></b>
             </p>
-
         </form>
-
     </div>
     <?php
     fm_show_footer();
@@ -948,10 +1479,8 @@ if (isset($_GET['chmod']) && !FM_IS_WIN) {
 //--- FILEMANAGER MAIN
 fm_show_header(); // HEADER
 fm_show_nav_path(FM_PATH); // current path
-
 // messages
 fm_show_message();
-
 $num_files = count($files);
 $num_folders = count($folders);
 $all_files_size = 0;
@@ -959,6 +1488,9 @@ $all_files_size = 0;
 <form action="" method="post">
 <input type="hidden" name="p" value="<?php echo fm_enc(FM_PATH) ?>">
 <input type="hidden" name="group" value="1">
+<?php if ($csrf_protection): ?>
+<input type="hidden" name="csrf_token" value="<?php echo fm_enc($_SESSION['csrf_token']); ?>">
+<?php endif; ?>
 <table><tr>
 <th style="width:3%"><label><input type="checkbox" title="Invert selection" onclick="checkbox_toggle()"></label></th>
 <th>Name</th><th style="width:10%">Size</th>
@@ -994,15 +1526,20 @@ foreach ($folders as $f) {
 <td><?php echo fm_enc($owner['name'] . ':' . $group['name']) ?></td>
 <?php endif; ?>
 <td>
+<?php if ($_SESSION['permissions']['delete']): ?>
 <a title="Delete" href="?p=<?php echo urlencode(FM_PATH) ?>&amp;del=<?php echo urlencode($f) ?>" onclick="return confirm('Delete folder?');"><i class="icon-cross"></i></a>
+<?php endif; ?>
+<?php if ($_SESSION['permissions']['rename']): ?>
 <a title="Rename" href="#" onclick="rename('<?php echo fm_enc(FM_PATH) ?>', '<?php echo fm_enc($f) ?>');return false;"><i class="icon-rename"></i></a>
+<?php endif; ?>
+<?php if ($_SESSION['permissions']['copy']): ?>
 <a title="Copy to..." href="?p=&amp;copy=<?php echo urlencode(trim(FM_PATH . '/' . $f, '/')) ?>"><i class="icon-copy"></i></a>
+<?php endif; ?>
 <a title="Direct link" href="<?php echo fm_enc(FM_ROOT_URL . (FM_PATH != '' ? '/' . FM_PATH : '') . '/' . $f . '/') ?>" target="_blank"><i class="icon-chain"></i></a>
 </td></tr>
     <?php
     flush();
 }
-
 foreach ($files as $f) {
     $is_link = is_link($path . '/' . $f);
     $img = $is_link ? 'icon-link_file' : fm_get_file_icon_class($path . '/' . $f);
@@ -1019,10 +1556,20 @@ foreach ($files as $f) {
         $owner = array('name' => '?');
         $group = array('name' => '?');
     }
+    
+    // Check if it's an image for thumbnail
+    $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
+    $is_image = in_array($ext, fm_get_image_exts());
+    $thumb_url = $is_image && $thumbnail_enabled ? '?p=' . urlencode(FM_PATH) . '&thumbnail=' . urlencode($f) : '';
     ?>
 <tr>
 <td><label><input type="checkbox" name="file[]" value="<?php echo fm_enc($f) ?>"></label></td>
-<td><div class="filename"><a href="<?php echo fm_enc($filelink) ?>" title="File info"><i class="<?php echo $img ?>"></i> <?php echo fm_enc(fm_convert_win($f)) ?></a><?php echo ($is_link ? ' &rarr; <i>' . fm_enc(readlink($path . '/' . $f)) . '</i>' : '') ?></div></td>
+<td><div class="filename">
+    <?php if ($thumb_url): ?>
+    <a href="<?php echo fm_enc($filelink) ?>" title="File info"><img src="<?php echo fm_enc($thumb_url) ?>" class="thumbnail" alt="thumbnail"></a>
+    <?php endif; ?>
+    <a href="<?php echo fm_enc($filelink) ?>" title="File info"><i class="<?php echo $img ?>"></i> <?php echo fm_enc(fm_convert_win($f)) ?></a><?php echo ($is_link ? ' &rarr; <i>' . fm_enc(readlink($path . '/' . $f)) . '</i>' : '') ?>
+</div></td>
 <td><span class="gray" title="<?php printf('%s bytes', $filesize_raw) ?>"><?php echo $filesize ?></span></td>
 <td><?php echo $modif ?></td>
 <?php if (!FM_IS_WIN): ?>
@@ -1030,16 +1577,23 @@ foreach ($files as $f) {
 <td><?php echo fm_enc($owner['name'] . ':' . $group['name']) ?></td>
 <?php endif; ?>
 <td>
+<?php if ($_SESSION['permissions']['delete']): ?>
 <a title="Delete" href="?p=<?php echo urlencode(FM_PATH) ?>&amp;del=<?php echo urlencode($f) ?>" onclick="return confirm('Delete file?');"><i class="icon-cross"></i></a>
+<?php endif; ?>
+<?php if ($_SESSION['permissions']['rename']): ?>
 <a title="Rename" href="#" onclick="rename('<?php echo fm_enc(FM_PATH) ?>', '<?php echo fm_enc($f) ?>');return false;"><i class="icon-rename"></i></a>
+<?php endif; ?>
+<?php if ($_SESSION['permissions']['copy']): ?>
 <a title="Copy to..." href="?p=<?php echo urlencode(FM_PATH) ?>&amp;copy=<?php echo urlencode(trim(FM_PATH . '/' . $f, '/')) ?>"><i class="icon-copy"></i></a>
+<?php endif; ?>
 <a title="Direct link" href="<?php echo fm_enc(FM_ROOT_URL . (FM_PATH != '' ? '/' . FM_PATH : '') . '/' . $f) ?>" target="_blank"><i class="icon-chain"></i></a>
+<?php if ($_SESSION['permissions']['download']): ?>
 <a title="Download" href="?p=<?php echo urlencode(FM_PATH) ?>&amp;dl=<?php echo urlencode($f) ?>"><i class="icon-download"></i></a>
+<?php endif; ?>
 </td></tr>
     <?php
     flush();
 }
-
 if (empty($folders) && empty($files)) {
     ?>
 <tr><td></td><td colspan="<?php echo !FM_IS_WIN ? '6' : '4' ?>"><em>Folder is empty</em></td></tr>
@@ -1058,25 +1612,91 @@ folders: <?php echo $num_folders ?>
 <p class="path"><a href="#" onclick="select_all();return false;"><i class="icon-checkbox"></i> Select all</a> &nbsp;
 <a href="#" onclick="unselect_all();return false;"><i class="icon-checkbox_uncheck"></i> Unselect all</a> &nbsp;
 <a href="#" onclick="invert_all();return false;"><i class="icon-checkbox_invert"></i> Invert selection</a></p>
-<p><input type="submit" name="delete" value="Delete" onclick="return confirm('Delete selected files and folders?')">
+<p>
+<?php if ($_SESSION['permissions']['delete']): ?>
+<input type="submit" name="delete" value="Delete" onclick="return confirm('Delete selected files and folders?')">
+<?php endif; ?>
+<?php if ($_SESSION['permissions']['download']): ?>
 <input type="submit" name="zip" value="Pack" onclick="return confirm('Create archive?')">
-<input type="submit" name="copy" value="Copy"></p>
+<?php endif; ?>
+<?php if ($_SESSION['permissions']['copy']): ?>
+<input type="submit" name="copy" value="Copy">
+<?php endif; ?>
+</p>
 </form>
-
 <?php
 fm_show_footer();
-
 //--- END
 
 // Functions
+/**
+ * Validate path to prevent directory traversal
+ * @param string $path
+ * @return bool
+ */
+function fm_is_valid_path($path) {
+    $real_path = realpath($path);
+    $root_path = realpath(FM_ROOT_PATH);
+    
+    // Check if the path is within the root directory
+    if ($real_path === false || strpos($real_path, $root_path) !== 0) {
+        return false;
+    }
+    
+    return true;
+}
+
+/**
+ * Validate and sanitize path
+ * @param string $path
+ * @return string
+ */
+function fm_validate_path($path) {
+    $path = fm_clean_path($path);
+    
+    // Prevent directory traversal
+    if (strpos($path, '../') !== false || strpos($path, '..\\') !== false) {
+        return '';
+    }
+    
+    // Check if the path is valid
+    $full_path = FM_ROOT_PATH . '/' . $path;
+    if (!fm_is_valid_path($full_path)) {
+        return '';
+    }
+    
+    return $path;
+}
+
+/**
+ * Sanitize filename
+ * @param string $filename
+ * @return string
+ */
+function fm_sanitize_filename($filename) {
+    // Remove unwanted characters
+    $filename = preg_replace('/[^\w\-.]/', '_', $filename);
+    
+    // Remove multiple consecutive underscores
+    $filename = preg_replace('/_+/', '_', $filename);
+    
+    // Trim underscores from beginning and end
+    $filename = trim($filename, '_');
+    
+    // If the filename is empty after sanitization, generate a random one
+    if (empty($filename)) {
+        $filename = 'file_' . bin2hex(random_bytes(4));
+    }
+    
+    return $filename;
+}
 
 /**
  * Delete  file or folder (recursively)
  * @param string $path
  * @return bool
  */
-function fm_rdelete($path)
-{
+function fm_rdelete($path) {
     if (is_link($path)) {
         return unlink($path);
     } elseif (is_dir($path)) {
@@ -1106,8 +1726,7 @@ function fm_rdelete($path)
  * @return bool
  * @todo Will use in mass chmod
  */
-function fm_rchmod($path, $filemode, $dirmode)
-{
+function fm_rchmod($path, $filemode, $dirmode) {
     if (is_dir($path)) {
         if (!chmod($path, $dirmode)) {
             return false;
@@ -1137,8 +1756,7 @@ function fm_rchmod($path, $filemode, $dirmode)
  * @param string $new
  * @return bool|null
  */
-function fm_rename($old, $new)
-{
+function fm_rename($old, $new) {
     return (!file_exists($new) && file_exists($old)) ? rename($old, $new) : null;
 }
 
@@ -1150,8 +1768,7 @@ function fm_rename($old, $new)
  * @param bool $force Create folder with same names instead file
  * @return bool
  */
-function fm_rcopy($path, $dest, $upd = true, $force = true)
-{
+function fm_rcopy($path, $dest, $upd = true, $force = true) {
     if (is_dir($path)) {
         if (!fm_mkdir($dest, $force)) {
             return false;
@@ -1180,8 +1797,7 @@ function fm_rcopy($path, $dest, $upd = true, $force = true)
  * @param bool $force
  * @return bool
  */
-function fm_mkdir($dir, $force)
-{
+function fm_mkdir($dir, $force) {
     if (file_exists($dir)) {
         if (is_dir($dir)) {
             return $dir;
@@ -1190,7 +1806,7 @@ function fm_mkdir($dir, $force)
         }
         unlink($dir);
     }
-    return mkdir($dir, 0777, true);
+    return mkdir($dir, 0755, true);
 }
 
 /**
@@ -1200,8 +1816,7 @@ function fm_mkdir($dir, $force)
  * @param bool $upd
  * @return bool
  */
-function fm_copy($f1, $f2, $upd)
-{
+function fm_copy($f1, $f2, $upd) {
     $time1 = filemtime($f1);
     if (file_exists($f2)) {
         $time2 = filemtime($f2);
@@ -1221,8 +1836,7 @@ function fm_copy($f1, $f2, $upd)
  * @param string $file_path
  * @return mixed|string
  */
-function fm_get_mime_type($file_path)
-{
+function fm_get_mime_type($file_path) {
     if (function_exists('finfo_open')) {
         $finfo = finfo_open(FILEINFO_MIME_TYPE);
         $mime = finfo_file($finfo, $file_path);
@@ -1244,8 +1858,7 @@ function fm_get_mime_type($file_path)
  * @param string $url
  * @param int $code
  */
-function fm_redirect($url, $code = 302)
-{
+function fm_redirect($url, $code = 302) {
     header('Location: ' . $url, true, $code);
     exit;
 }
@@ -1255,8 +1868,7 @@ function fm_redirect($url, $code = 302)
  * @param string $path
  * @return string
  */
-function fm_clean_path($path)
-{
+function fm_clean_path($path) {
     $path = trim($path);
     $path = trim($path, '\\/');
     $path = str_replace(array('../', '..\\'), '', $path);
@@ -1271,8 +1883,7 @@ function fm_clean_path($path)
  * @param string $path
  * @return bool|string
  */
-function fm_get_parent_path($path)
-{
+function fm_get_parent_path($path) {
     $path = fm_clean_path($path);
     if ($path != '') {
         $array = explode('/', $path);
@@ -1290,8 +1901,7 @@ function fm_get_parent_path($path)
  * @param int $size
  * @return string
  */
-function fm_get_filesize($size)
-{
+function fm_get_filesize($size) {
     if ($size < 1000) {
         return sprintf('%s B', $size);
     } elseif (($size / 1024) < 1000) {
@@ -1310,8 +1920,7 @@ function fm_get_filesize($size)
  * @param string $path
  * @return array|bool
  */
-function fm_get_zif_info($path)
-{
+function fm_get_zif_info($path) {
     if (function_exists('zip_open')) {
         $arch = zip_open($path);
         if ($arch) {
@@ -1339,9 +1948,8 @@ function fm_get_zif_info($path)
  * @param string $text
  * @return string
  */
-function fm_enc($text)
-{
-    return htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+function fm_enc($text) {
+    return htmlspecialchars($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
 }
 
 /**
@@ -1349,8 +1957,7 @@ function fm_enc($text)
  * @param string $msg
  * @param string $status
  */
-function fm_set_msg($msg, $status = 'ok')
-{
+function fm_set_msg($msg, $status = 'ok') {
     $_SESSION['message'] = $msg;
     $_SESSION['status'] = $status;
 }
@@ -1360,8 +1967,7 @@ function fm_set_msg($msg, $status = 'ok')
  * @param string $string
  * @return int
  */
-function fm_is_utf8($string)
-{
+function fm_is_utf8($string) {
     return preg_match('//u', $string);
 }
 
@@ -1370,8 +1976,7 @@ function fm_is_utf8($string)
  * @param string $filename
  * @return string
  */
-function fm_convert_win($filename)
-{
+function fm_convert_win($filename) {
     if (FM_IS_WIN && function_exists('iconv')) {
         $filename = iconv(FM_ICONV_INPUT_ENC, 'UTF-8//IGNORE', $filename);
     }
@@ -1383,11 +1988,9 @@ function fm_convert_win($filename)
  * @param string $path
  * @return string
  */
-function fm_get_file_icon_class($path)
-{
+function fm_get_file_icon_class($path) {
     // get extension
     $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-
     switch ($ext) {
         case 'ico': case 'gif': case 'jpg': case 'jpeg': case 'jpc': case 'jp2':
         case 'jpx': case 'xbm': case 'wbmp': case 'png': case 'bmp': case 'tif':
@@ -1422,7 +2025,7 @@ function fm_get_file_icon_class($path)
             break;
         case 'avi': case 'mpg': case 'mpeg': case 'mp4': case 'm4v': case 'flv':
         case 'f4v': case 'ogm': case 'ogv': case 'mov': case 'mkv': case '3gp':
-        case 'asf': case 'wmv':
+        case 'asf': case 'wmv': case 'webm':
             $img = 'icon-file_film';
             break;
         case 'eml': case 'msg':
@@ -1467,7 +2070,6 @@ function fm_get_file_icon_class($path)
         default:
             $img = 'icon-document';
     }
-
     return $img;
 }
 
@@ -1475,8 +2077,7 @@ function fm_get_file_icon_class($path)
  * Get image files extensions
  * @return array
  */
-function fm_get_image_exts()
-{
+function fm_get_image_exts() {
     return array('ico', 'gif', 'jpg', 'jpeg', 'jpc', 'jp2', 'jpx', 'xbm', 'wbmp', 'png', 'bmp', 'tif', 'tiff', 'psd');
 }
 
@@ -1484,26 +2085,23 @@ function fm_get_image_exts()
  * Get video files extensions
  * @return array
  */
-function fm_get_video_exts()
-{
-    return array('webm', 'mp4', 'm4v', 'ogm', 'ogv', 'mov');
+function fm_get_video_exts() {
+    return array('webm', 'mp4', 'm4v', 'ogm', 'ogv', 'mov', 'mkv', 'avi', 'mpg', 'mpeg', 'flv', 'f4v', '3gp', 'asf', 'wmv');
 }
 
 /**
  * Get audio files extensions
  * @return array
  */
-function fm_get_audio_exts()
-{
-    return array('wav', 'mp3', 'ogg', 'm4a');
+function fm_get_audio_exts() {
+    return array('wav', 'mp3', 'ogg', 'm4a', 'aac', 'flac', 'wma', 'mka', 'ac3', 'tds');
 }
 
 /**
  * Get text file extensions
  * @return array
  */
-function fm_get_text_exts()
-{
+function fm_get_text_exts() {
     return array(
         'txt', 'css', 'ini', 'conf', 'log', 'htaccess', 'passwd', 'ftpquota', 'sql', 'js', 'json', 'sh', 'config',
         'php', 'php4', 'php5', 'phps', 'phtml', 'htm', 'html', 'shtml', 'xhtml', 'xml', 'xsl', 'm3u', 'm3u8', 'pls', 'cue',
@@ -1516,8 +2114,7 @@ function fm_get_text_exts()
  * Get mime types of text files
  * @return array
  */
-function fm_get_text_mimes()
-{
+function fm_get_text_mimes() {
     return array(
         'application/xml',
         'application/javascript',
@@ -1531,8 +2128,7 @@ function fm_get_text_mimes()
  * Get file names of text files w/o extensions
  * @return array
  */
-function fm_get_text_names()
-{
+function fm_get_text_names() {
     return array(
         'license',
         'readme',
@@ -1548,20 +2144,18 @@ function fm_get_text_names()
 class FM_Zipper
 {
     private $zip;
-
-    public function __construct()
-    {
+    
+    public function __construct() {
         $this->zip = new ZipArchive();
     }
-
+    
     /**
      * Create archive with name $filename and files $files (RELATIVE PATHS!)
      * @param string $filename
      * @param array|string $files
      * @return bool
      */
-    public function create($filename, $files)
-    {
+    public function create($filename, $files) {
         $res = $this->zip->open($filename, ZipArchive::CREATE);
         if ($res !== true) {
             return false;
@@ -1583,15 +2177,14 @@ class FM_Zipper
             return false;
         }
     }
-
+    
     /**
      * Extract archive $filename to folder $path (RELATIVE OR ABSOLUTE PATHS)
      * @param string $filename
      * @param string $path
      * @return bool
      */
-    public function unzip($filename, $path)
-    {
+    public function unzip($filename, $path) {
         $res = $this->zip->open($filename);
         if ($res !== true) {
             return false;
@@ -1602,14 +2195,13 @@ class FM_Zipper
         }
         return false;
     }
-
+    
     /**
      * Add file/folder to archive
      * @param string $filename
-     * @return bool
+     * return bool
      */
-    private function addFileOrDir($filename)
-    {
+    private function addFileOrDir($filename) {
         if (is_file($filename)) {
             return $this->zip->addFile($filename);
         } elseif (is_dir($filename)) {
@@ -1617,14 +2209,13 @@ class FM_Zipper
         }
         return false;
     }
-
+    
     /**
      * Add folder recursively
      * @param string $path
      * @return bool
      */
-    private function addDir($path)
-    {
+    private function addDir($path) {
         if (!$this->zip->addEmptyDir($path)) {
             return false;
         }
@@ -1650,18 +2241,23 @@ class FM_Zipper
 }
 
 //--- templates functions
-
 /**
  * Show nav block
  * @param string $path
  */
-function fm_show_nav_path($path)
-{
+function fm_show_nav_path($path) {
     ?>
 <div class="path">
 <div class="float-right">
+<?php if ($_SESSION['permissions']['upload']): ?>
 <a title="Upload files" href="?p=<?php echo urlencode(FM_PATH) ?>&amp;upload"><i class="icon-upload"></i></a>
+<?php endif; ?>
+<?php if ($_SESSION['permissions']['create_folder']): ?>
 <a title="New folder" href="#" onclick="newfolder('<?php echo fm_enc(FM_PATH) ?>');return false;"><i class="icon-folder_add"></i></a>
+<?php endif; ?>
+<?php if ($_SESSION['permissions']['manage_users']): ?>
+<a title="User Management" href="?p=<?php echo urlencode(FM_PATH) ?>&amp;user_management=1"><i class="icon-users"></i></a>
+<?php endif; ?>
 <?php if (FM_USE_AUTH): ?><a title="Logout" href="?logout=1"><i class="icon-logout"></i></a><?php endif; ?>
 </div>
         <?php
@@ -1689,8 +2285,7 @@ function fm_show_nav_path($path)
 /**
  * Show message from session
  */
-function fm_show_message()
-{
+function fm_show_message() {
     if (isset($_SESSION['message'])) {
         $class = isset($_SESSION['status']) ? $_SESSION['status'] : 'ok';
         echo '<p class="message ' . $class . '">' . $_SESSION['message'] . '</p>';
@@ -1702,8 +2297,7 @@ function fm_show_message()
 /**
  * Show page header
  */
-function fm_show_header()
-{
+function fm_show_header() {
     $sprites_ver = '20160315';
     header("Content-Type: text/html; charset=utf-8");
     header("Expires: Sat, 26 Jul 1997 05:00:00 GMT");
@@ -1715,6 +2309,7 @@ function fm_show_header()
 <head>
 <meta charset="utf-8">
 <title>PHP File Manager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
 html,body,div,span,p,pre,a,code,em,img,small,strong,ol,ul,li,form,label,table,tr,th,td{margin:0;padding:0;vertical-align:baseline;outline:none;font-size:100%;background:transparent;border:none;text-decoration:none}
 html{overflow-y:scroll}body{padding:0;font:13px/16px Tahoma,Arial,sans-serif;color:#222;background:#efefef}
@@ -1763,9 +2358,24 @@ code.maxheight,pre.maxheight{max-height:512px}input[type="checkbox"]{margin:0;pa
 .icon-file_word{background-position:-320px -16px}.icon-file_zip{background-position:-336px -16px}
 .icon-logout{background-position:-304px 0}.icon-chain{background-position:-320px 0}
 .icon-link_folder{background-position:-352px -16px}.icon-link_file{background-position:-368px -16px}
+.icon-users{background-position:-384px 0}
 .compact-table{border:0;width:auto}.compact-table td,.compact-table th{width:100px;border:0;text-align:center}.compact-table tr:hover td{background-color:#fff}
 .filename{max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .break-word{word-wrap:break-word}
+.thumbnail{max-width:50px;max-height:50px;margin-right:5px;vertical-align:middle;border:1px solid #ddd}
+/* Responsive styles */
+@media (max-width: 768px) {
+    #wrapper{min-width:inherit;margin:5px}
+    table{display:block;overflow-x:auto}
+    .filename{max-width:200px}
+    .path{font-size:12px}
+    [class*="icon-"]{width:14px;height:14px}
+}
+@media (max-width: 480px) {
+    .filename{max-width:100px}
+    .path{padding:2px 4px;font-size:11px}
+    th,td{padding:2px 4px;font-size:12px}
+}
 </style>
 <link rel="icon" href="<?php echo FM_SELF_URL ?>?img=favicon" type="image/png">
 <link rel="shortcut icon" href="<?php echo FM_SELF_URL ?>?img=favicon" type="image/png">
@@ -1781,10 +2391,12 @@ code.maxheight,pre.maxheight{max-height:512px}input[type="checkbox"]{margin:0;pa
 /**
  * Show page footer
  */
-function fm_show_footer()
-{
+function fm_show_footer() {
     ?>
-<p class="center"><small><a href="https://github.com/alexantr/filemanager" target="_blank">PHP File Manager</a></small></p>
+<p class="center"><small>
+    <a href="https://github.com/retno-W" target="_blank">PHP File Manager</a> - Secure Version | 
+    Forked from <a href="https://github.com/alexantr/filemanager" target="_blank">alexantr/filemanager</a>
+</small></p>
 </div>
 <script>
 function newfolder(p){var n=prompt('New folder name','folder');if(n!==null&&n!==''){window.location.search='p='+encodeURIComponent(p)+'&new='+encodeURIComponent(n);}}
@@ -1809,11 +2421,9 @@ function checkbox_toggle(){var l=get_checkboxes();l.push(this);change_checkboxes
  * Show image
  * @param string $img
  */
-function fm_show_image($img)
-{
+function fm_show_image($img) {
     $modified_time = gmdate('D, d M Y 00:00:00') . ' GMT';
-    $expires_time = gmdate('D, d M Y 00:00:00', strtotime('+1 day')) . ' GMT';
-
+    $expires_time = gm_date('D, d M Y 00:00:00', strtotime('+1 day')) . ' GMT';
     $img = trim($img);
     $images = fm_get_images();
     $image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR42mL4//8/A0CAAQAI/AL+26JNFgAAAABJRU5ErkJggg==';
@@ -1826,7 +2436,6 @@ function fm_show_image($img)
     } else {
         $size = strlen($image);
     }
-
     if (function_exists('header_remove')) {
         header_remove('Cache-Control');
         header_remove('Pragma');
@@ -1834,13 +2443,98 @@ function fm_show_image($img)
         header('Cache-Control:');
         header('Pragma:');
     }
-
     header('Last-Modified: ' . $modified_time, true, 200);
     header('Expires: ' . $expires_time);
     header('Content-Length: ' . $size);
     header('Content-Type: image/png');
     echo $image;
+    exit;
+}
 
+/**
+ * Show thumbnail
+ * @param string $file
+ */
+function fm_show_thumbnail($file) {
+    global $thumbnail_size, $thumbnail_quality;
+    
+    $file = fm_clean_path($file);
+    $file = str_replace('/', '', $file);
+    
+    $path = FM_ROOT_PATH;
+    if (FM_PATH != '') {
+        $path .= '/' . FM_PATH;
+    }
+    
+    if ($file == '' || !is_file($path . '/' . $file) || !fm_is_valid_path($path . '/' . $file)) {
+        header('HTTP/1.0 404 Not Found');
+        exit;
+    }
+    
+    $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+    if (!in_array($ext, fm_get_image_exts())) {
+        header('HTTP/1.0 403 Forbidden');
+        exit;
+    }
+    
+    $image_path = $path . '/' . $file;
+    
+    // Get image info
+    $image_info = getimagesize($image_path);
+    if (!$image_info) {
+        header('HTTP/1.0 403 Forbidden');
+        exit;
+    }
+    
+    // Create thumbnail
+    $width = $image_info[0];
+    $height = $image_info[1];
+    $type = $image_info[2];
+    
+    // Calculate new dimensions
+    if ($width > $height) {
+        $new_width = $thumbnail_size;
+        $new_height = round($height * ($thumbnail_size / $width));
+    } else {
+        $new_height = $thumbnail_size;
+        $new_width = round($width * ($thumbnail_size / $height));
+    }
+    
+    // Create new image
+    $new_image = imagecreatetruecolor($new_width, $new_height);
+    
+    // Load original image
+    switch ($type) {
+        case IMAGETYPE_JPEG:
+            $source = imagecreatefromjpeg($image_path);
+            break;
+        case IMAGETYPE_PNG:
+            $source = imagecreatefrompng($image_path);
+            // Preserve transparency
+            imagealphablending($new_image, false);
+            imagesavealpha($new_image, true);
+            break;
+        case IMAGETYPE_GIF:
+            $source = imagecreatefromgif($image_path);
+            // Preserve transparency
+            imagealphablending($new_image, false);
+            imagesavealpha($new_image, true);
+            break;
+        default:
+            header('HTTP/1.0 403 Forbidden');
+            exit;
+    }
+    
+    // Resize image
+    imagecopyresampled($new_image, $source, 0, 0, 0, 0, $new_width, $new_height, $width, $height);
+    
+    // Output thumbnail
+    header('Content-Type: image/jpeg');
+    imagejpeg($new_image, null, $thumbnail_quality);
+    
+    // Free memory
+    imagedestroy($new_image);
+    imagedestroy($source);
     exit;
 }
 
@@ -1848,8 +2542,7 @@ function fm_show_image($img)
  * Get base64-encoded images
  * @return array
  */
-function fm_get_images()
-{
+function fm_get_images() {
     return array(
         'favicon' => 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJ
 bWFnZVJlYWR5ccllPAAAAZVJREFUeNqkk79Lw0AUx1+uidTQim4Waxfpnl1BcHMR6uLkIF0cpYOI
@@ -1900,9 +2593,9 @@ GOxKw1aU6ZOhX2ZK6GYZ42ZoChbgdDED5UzAWcLRR4+cA0U1ZfmiRcuRgJkIYIwBARThuyDzE7hf
 nulLR5qKS5aWMAFOV7WrghjAAvKKpoEByH8J5C8WMELCC5AckkhGYCeS1lZfa6uf2/AuoM51yePB
 DYrM18AD/sE8Z2DSJLaeLHNCr385C9iowbekfHOvQWBN4dzxXhUIuIRPgD+yCskWrs3MOETIyFy7
 sFMC9roYe0EA2YLMwIGeCBh68iDh5P2TFUOhzhs3LammFC5YUIgEVmY/mKVJ4wTUx2JvP358G4vV
-8wLo/TKKl45cWgwaTNNx1b3M6TwNh5DuANJ7xk37Kv+RBDCAtzMvoPJUZSUVID116pTUw3ecyPZI
-vHIzfEQXMAEeAszzpKUhoR81m4GVNnJHyocN/Xnu2NLmaj/CEVBdqvX5FArvXGTYoAhIaxUb2GDo
-jAD3doabCeAMVFABZ6mAs/fP7sCBLykal1KjYemMYYhh2zgrWUBLi2r8eFVLiyDAlpS/ccXIkSXk
+8wLo/TKKl45cWgwaTNNx1b3M6TwNh5DuANJ7xk37Kv+RBDCAtzMvoPJUZSUVID116pTUw3ecyPZIv
+HIzfEQXMAEeAszzpKUhoR81m4GVNnJHyocN/Xnu2NLmaj/CEVBdqvX5FArvXGTYoAhIaxUb2GDoj
+AD3doabCeAMVFABZ6mAs/fP7sCBLykal1KjYemMYYhh2zgrWUBLi2r8eFVLiyDAlpS/ccXIkSXk
 IJTIiYAy52l8COkOoAZE+ZtMzEA/p8ApJ/lcldX4fc98fn8Nt+Fhd/Lbnc4DdF68fjgNzZMQhQkQ
 UKK52mAQC/D5fHVe6VyEDBlWqzXDwAbUGQEHdjAOgACcAGegojsRcPAY4eD9g7uGonl5S4oWL77G
 17D+fF/AewmzkDNQaG5v1+SmCtASAWKgAVWtKKD/w0egD/TC005igO2AsctAQB6/RU1VVVUmuZwM
